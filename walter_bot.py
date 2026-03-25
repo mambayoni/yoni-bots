@@ -1,18 +1,17 @@
 import os
 import asyncio
 import requests
-import time
+import json
 from datetime import datetime, timezone
 from twikit import Client
 
 # ── הגדרות (נטענות ממשתני סביבה) ──
 TELEGRAM_BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 TELEGRAM_CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
-TWITTER_USERNAME   = os.environ.get('TWITTER_USERNAME', '')
-TWITTER_EMAIL      = os.environ.get('TWITTER_EMAIL', '')
-TWITTER_PASSWORD   = os.environ.get('TWITTER_PASSWORD', '')
-TARGET_USER        = 'DeItaone'         # Walter Bloomberg
-CHECK_INTERVAL_SEC = 15                 # סריקה כל 15 שניות
+AUTH_TOKEN          = os.environ.get('TWITTER_AUTH_TOKEN', '')
+CT0                 = os.environ.get('TWITTER_CT0', '')
+TARGET_USER         = 'DeItaone'         # Walter Bloomberg
+CHECK_INTERVAL_SEC  = 15                 # סריקה כל 15 שניות
 
 COOKIES_FILE = '/tmp/twitter_cookies.json'
 
@@ -43,31 +42,16 @@ def fmt(tweet_text, tweet_id):
     )
 
 
-async def login_twitter(client):
-    """Login to Twitter, with cookie reuse to avoid rate limits."""
-    # Try loading saved cookies first
-    try:
-        client.load_cookies(COOKIES_FILE)
-        print('[Auth] Loaded saved cookies')
-        return True
-    except Exception:
-        pass
-
-    # Fresh login
-    print('[Auth] Logging in to Twitter...')
-    try:
-        await client.login(
-            auth_info_1=TWITTER_USERNAME,
-            auth_info_2=TWITTER_EMAIL or TWITTER_USERNAME,
-            password=TWITTER_PASSWORD,
-            cookies_file=COOKIES_FILE
-        )
-        print('[Auth] Login successful, cookies saved')
-        return True
-    except Exception as e:
-        print(f'[Auth] Login failed: {e}')
-        send_telegram(f'🔴 <b>Walter Bot: Login failed</b>\n{e}')
-        return False
+def create_cookies_file():
+    """Create cookies JSON file from environment variables."""
+    cookies = {
+        "auth_token": AUTH_TOKEN,
+        "ct0": CT0,
+        "lang": "en",
+    }
+    with open(COOKIES_FILE, 'w') as f:
+        json.dump(cookies, f)
+    print(f'[Auth] Cookies file created')
 
 
 async def main():
@@ -77,17 +61,26 @@ async def main():
     print(f'   Interval: {CHECK_INTERVAL_SEC} seconds')
     print('=' * 50)
 
+    if not AUTH_TOKEN or not CT0:
+        print('[!] Missing TWITTER_AUTH_TOKEN or TWITTER_CT0')
+        send_telegram('🔴 <b>Walter Bot: Missing cookies</b>')
+        return
+
+    # Create cookies file and load into client
+    create_cookies_file()
+
     client = Client(
         'en-US',
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
     )
 
-    if not await login_twitter(client):
-        print('[!] Waiting 5 minutes before retry...')
-        await asyncio.sleep(300)
-        if not await login_twitter(client):
-            print('[!] Login failed twice. Exiting.')
-            return
+    try:
+        client.load_cookies(COOKIES_FILE)
+        print('[Auth] Cookies loaded successfully')
+    except Exception as e:
+        print(f'[Auth] Failed to load cookies: {e}')
+        send_telegram(f'🔴 <b>Walter Bot: Cookie error</b>\n{e}')
+        return
 
     # Get user ID for DeItaone
     try:
@@ -96,7 +89,7 @@ async def main():
         print(f'[Init] Found @{TARGET_USER} (ID: {user_id})')
     except Exception as e:
         print(f'[Error] Could not find user @{TARGET_USER}: {e}')
-        send_telegram(f'🔴 <b>Walter Bot: User not found</b>\n{e}')
+        send_telegram(f'🔴 <b>Walter Bot: Error</b>\n{e}')
         return
 
     send_telegram(
@@ -116,13 +109,10 @@ async def main():
             if not tweets:
                 fail_count += 1
                 print(f'[!] No tweets returned (fail #{fail_count})')
-                if fail_count >= 10:
-                    print('[!] Too many failures, re-authenticating...')
-                    if await login_twitter(client):
-                        fail_count = 0
-                    else:
-                        print('[!] Re-login failed, waiting 5 min...')
-                        await asyncio.sleep(300)
+                if fail_count >= 20:
+                    print('[!] Too many failures. Cookies may have expired.')
+                    send_telegram('🔴 <b>Walter Bot: Cookies expired, need refresh</b>')
+                    return
                 await asyncio.sleep(30)
                 continue
 
