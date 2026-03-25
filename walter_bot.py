@@ -8,10 +8,11 @@ from twikit import Client
 # ── הגדרות (נטענות ממשתני סביבה) ──
 TELEGRAM_BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 TELEGRAM_CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
-TWITTER_USERNAME   = os.environ.get('TWITTER_USERNAME', 'mambamateo')
+TWITTER_USERNAME   = os.environ.get('TWITTER_USERNAME', '')
+TWITTER_EMAIL      = os.environ.get('TWITTER_EMAIL', '')
 TWITTER_PASSWORD   = os.environ.get('TWITTER_PASSWORD', '')
 TARGET_USER        = 'DeItaone'         # Walter Bloomberg
-CHECK_INTERVAL_SEC = 10                 # סריקה כל 10 שניות
+CHECK_INTERVAL_SEC = 15                 # סריקה כל 15 שניות
 
 COOKIES_FILE = '/tmp/twitter_cookies.json'
 
@@ -42,6 +43,33 @@ def fmt(tweet_text, tweet_id):
     )
 
 
+async def login_twitter(client):
+    """Login to Twitter, with cookie reuse to avoid rate limits."""
+    # Try loading saved cookies first
+    try:
+        client.load_cookies(COOKIES_FILE)
+        print('[Auth] Loaded saved cookies')
+        return True
+    except Exception:
+        pass
+
+    # Fresh login
+    print('[Auth] Logging in to Twitter...')
+    try:
+        await client.login(
+            auth_info_1=TWITTER_USERNAME,
+            auth_info_2=TWITTER_EMAIL or TWITTER_USERNAME,
+            password=TWITTER_PASSWORD,
+            cookies_file=COOKIES_FILE
+        )
+        print('[Auth] Login successful, cookies saved')
+        return True
+    except Exception as e:
+        print(f'[Auth] Login failed: {e}')
+        send_telegram(f'🔴 <b>Walter Bot: Login failed</b>\n{e}')
+        return False
+
+
 async def main():
     print('=' * 50)
     print('Walter Bloomberg Bot starting...')
@@ -49,25 +77,16 @@ async def main():
     print(f'   Interval: {CHECK_INTERVAL_SEC} seconds')
     print('=' * 50)
 
-    client = Client('en-US')
+    client = Client(
+        'en-US',
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+    )
 
-    # Try loading saved cookies first
-    try:
-        client.load_cookies(COOKIES_FILE)
-        print('[Auth] Loaded saved cookies')
-    except Exception:
-        print('[Auth] Logging in to Twitter...')
-        try:
-            await client.login(
-                auth_info_1=TWITTER_USERNAME,
-                auth_info_2=TWITTER_USERNAME,
-                password=TWITTER_PASSWORD,
-                cookies_file=COOKIES_FILE
-            )
-            print('[Auth] Login successful')
-        except Exception as e:
-            print(f'[Auth] Login failed: {e}')
-            send_telegram(f'🔴 <b>Walter Bot: Login failed</b>\n{e}')
+    if not await login_twitter(client):
+        print('[!] Waiting 5 minutes before retry...')
+        await asyncio.sleep(300)
+        if not await login_twitter(client):
+            print('[!] Login failed twice. Exiting.')
             return
 
     # Get user ID for DeItaone
@@ -96,20 +115,14 @@ async def main():
 
             if not tweets:
                 fail_count += 1
+                print(f'[!] No tweets returned (fail #{fail_count})')
                 if fail_count >= 10:
                     print('[!] Too many failures, re-authenticating...')
-                    try:
-                        await client.login(
-                            auth_info_1=TWITTER_USERNAME,
-                            auth_info_2=TWITTER_USERNAME,
-                            password=TWITTER_PASSWORD,
-                            cookies_file=COOKIES_FILE
-                        )
-                        print('[Auth] Re-login successful')
+                    if await login_twitter(client):
                         fail_count = 0
-                    except Exception as e:
-                        print(f'[Auth] Re-login failed: {e}')
-                        await asyncio.sleep(60)
+                    else:
+                        print('[!] Re-login failed, waiting 5 min...')
+                        await asyncio.sleep(300)
                 await asyncio.sleep(30)
                 continue
 
@@ -137,7 +150,7 @@ async def main():
         except Exception as e:
             print(f'[Error] {e}')
             fail_count += 1
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
 
 
 if __name__ == '__main__':
