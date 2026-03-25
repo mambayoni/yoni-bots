@@ -59,7 +59,7 @@ def fmt(tweet_text, tweet_id):
 
 def get_user_id(screen_name):
     """Get Twitter user ID from screen name."""
-    url = 'https://x.com/i/api/graphql/xmU6X_CKVnQ5lSrCbAmJsg/UserByScreenName'
+    url = 'https://x.com/i/api/graphql/sLVLhk0bGj3MVFEKTdax1w/UserByScreenName'
     variables = json.dumps({
         "screen_name": screen_name,
         "withSafetyModeUserFields": True
@@ -91,7 +91,7 @@ def get_user_id(screen_name):
 
 def get_user_tweets(user_id):
     """Get latest tweets from a user."""
-    url = 'https://x.com/i/api/graphql/Y9WM4Id6UcGFE8Z-rnEEhg/UserTweets'
+    url = 'https://x.com/i/api/graphql/HuTx74BxAnezK1gWvYY7zg/UserTweets'
     variables = json.dumps({
         "userId": user_id,
         "count": 20,
