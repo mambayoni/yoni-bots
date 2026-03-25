@@ -1,22 +1,19 @@
 import os
+import asyncio
 import requests
 import time
 from datetime import datetime, timezone
-from bs4 import BeautifulSoup
+from twikit import Client
 
 # ── הגדרות (נטענות ממשתני סביבה) ──
 TELEGRAM_BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 TELEGRAM_CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
-TWITTER_USERNAME   = 'DeItaone'         # Walter Bloomberg
-CHECK_INTERVAL_SEC = 5                  # סריקה כל 5 שניות
+TWITTER_USERNAME   = os.environ.get('TWITTER_USERNAME', 'mambamateo')
+TWITTER_PASSWORD   = os.environ.get('TWITTER_PASSWORD', '')
+TARGET_USER        = 'DeItaone'         # Walter Bloomberg
+CHECK_INTERVAL_SEC = 10                 # סריקה כל 10 שניות
 
-NITTER_INSTANCES = [
-    'https://nitter.privacydev.net',
-    'https://nitter.poast.org',
-    'https://nitter.nl',
-    'https://nitter.it',
-    'https://nitter.cz',
-]
+COOKIES_FILE = '/tmp/twitter_cookies.json'
 
 
 def send_telegram(message):
@@ -34,63 +31,54 @@ def send_telegram(message):
         return False
 
 
-def fetch_tweets(base):
-    try:
-        r = requests.get(
-            f'{base}/{TWITTER_USERNAME}',
-            headers={'User-Agent': 'Mozilla/5.0'},
-            timeout=15
-        )
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.text, 'html.parser')
-        tweets = []
-        for item in soup.select('.timeline-item'):
-            if item.select_one('.retweet-header'):
-                continue
-            content = item.select_one('.tweet-content')
-            link_el = item.select_one('.tweet-link')
-            if not content:
-                continue
-            text = content.get_text(separator=' ', strip=True)
-            tweet_id = link_el['href'].split('/')[-1] if link_el else text[:40]
-            link = f'https://x.com/{TWITTER_USERNAME}/status/{tweet_id}'
-            tweets.append({'id': tweet_id, 'text': text, 'link': link})
-        return tweets
-    except Exception as e:
-        print(f'Nitter error {base}: {e}')
-        return []
-
-
-def get_instance():
-    for inst in NITTER_INSTANCES:
-        try:
-            r = requests.get(f'{inst}/{TWITTER_USERNAME}', timeout=10)
-            if r.status_code == 200 and 'timeline' in r.text:
-                print(f'Instance active: {inst}')
-                return inst
-        except:
-            continue
-    return None
-
-
-def fmt(t):
+def fmt(tweet_text, tweet_id):
     now = datetime.now(timezone.utc).strftime('%H:%M UTC')
+    link = f'https://x.com/{TARGET_USER}/status/{tweet_id}'
     return (
         f'📡 <b>Walter Bloomberg</b> | {now}\n'
         f'─────────────────\n'
-        f'{t["text"]}\n\n'
-        f'🔗 <a href="{t["link"]}">מקור</a>'
+        f'{tweet_text}\n\n'
+        f'🔗 <a href="{link}">מקור</a>'
     )
 
 
-# ── הרצה ──
-if __name__ == '__main__':
+async def main():
     print('=' * 50)
     print('Walter Bloomberg Bot starting...')
-    print(f'   Tracking: @{TWITTER_USERNAME}')
+    print(f'   Tracking: @{TARGET_USER}')
     print(f'   Interval: {CHECK_INTERVAL_SEC} seconds')
     print('=' * 50)
+
+    client = Client('en-US')
+
+    # Try loading saved cookies first
+    try:
+        client.load_cookies(COOKIES_FILE)
+        print('[Auth] Loaded saved cookies')
+    except Exception:
+        print('[Auth] Logging in to Twitter...')
+        try:
+            await client.login(
+                auth_info_1=TWITTER_USERNAME,
+                auth_info_2=TWITTER_USERNAME,
+                password=TWITTER_PASSWORD,
+                cookies_file=COOKIES_FILE
+            )
+            print('[Auth] Login successful')
+        except Exception as e:
+            print(f'[Auth] Login failed: {e}')
+            send_telegram(f'🔴 <b>Walter Bot: Login failed</b>\n{e}')
+            return
+
+    # Get user ID for DeItaone
+    try:
+        user = await client.get_user_by_screen_name(TARGET_USER)
+        user_id = user.id
+        print(f'[Init] Found @{TARGET_USER} (ID: {user_id})')
+    except Exception as e:
+        print(f'[Error] Could not find user @{TARGET_USER}: {e}')
+        send_telegram(f'🔴 <b>Walter Bot: User not found</b>\n{e}')
+        return
 
     send_telegram(
         '✅ <b>Walter Bloomberg Bot הופעל!</b>\n'
@@ -99,39 +87,48 @@ if __name__ == '__main__':
     )
 
     seen = set()
-    instance = get_instance()
     first = True
     fail_count = 0
 
     while True:
         try:
-            tweets = fetch_tweets(instance) if instance else []
+            tweets = await client.get_user_tweets(user_id, 'Tweets', count=20)
 
             if not tweets:
                 fail_count += 1
-                if fail_count >= 3:
-                    print('[!] Searching for alternative instance...')
-                    instance = get_instance()
-                    fail_count = 0
-                time.sleep(30)
+                if fail_count >= 10:
+                    print('[!] Too many failures, re-authenticating...')
+                    try:
+                        await client.login(
+                            auth_info_1=TWITTER_USERNAME,
+                            auth_info_2=TWITTER_USERNAME,
+                            password=TWITTER_PASSWORD,
+                            cookies_file=COOKIES_FILE
+                        )
+                        print('[Auth] Re-login successful')
+                        fail_count = 0
+                    except Exception as e:
+                        print(f'[Auth] Re-login failed: {e}')
+                        await asyncio.sleep(60)
+                await asyncio.sleep(30)
                 continue
 
             fail_count = 0
 
             if first:
-                seen = {t['id'] for t in tweets}
+                seen = {t.id for t in tweets}
                 print(f'[Init] {len(seen)} existing tweets — waiting for new ones...')
                 first = False
             else:
-                new = [t for t in tweets if t['id'] not in seen]
-                for t in reversed(new):
-                    ok = send_telegram(fmt(t))
+                new_tweets = [t for t in tweets if t.id not in seen]
+                for t in reversed(new_tweets):
+                    ok = send_telegram(fmt(t.text, t.id))
                     status = 'OK' if ok else 'FAIL'
-                    print(f'[{status}] {t["text"][:70]}')
-                    seen.add(t['id'])
-                    time.sleep(0.5)
+                    print(f'[{status}] {t.text[:70]}')
+                    seen.add(t.id)
+                    await asyncio.sleep(0.5)
 
-            time.sleep(CHECK_INTERVAL_SEC)
+            await asyncio.sleep(CHECK_INTERVAL_SEC)
 
         except KeyboardInterrupt:
             print('\n[!] Bot stopped.')
@@ -139,4 +136,9 @@ if __name__ == '__main__':
             break
         except Exception as e:
             print(f'[Error] {e}')
-            time.sleep(15)
+            fail_count += 1
+            await asyncio.sleep(15)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

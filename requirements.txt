@@ -3,3 +3,4 @@ beautifulsoup4
 anthropic
 httpx
 schedule
+twikit
