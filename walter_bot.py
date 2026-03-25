@@ -10,7 +10,7 @@ TELEGRAM_CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
 AUTH_TOKEN          = os.environ.get('TWITTER_AUTH_TOKEN', '')
 CT0                 = os.environ.get('TWITTER_CT0', '')
 TARGET_USER         = 'DeItaone'
-CHECK_INTERVAL_SEC  = 15
+CHECK_INTERVAL_SEC  = 5
 
 # Twitter internal API bearer token (public, embedded in twitter.com JS)
 BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA'
